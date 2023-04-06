@@ -2,10 +2,10 @@
 #
 # Code for generation and analysis of a single 
 # simulated dataset from 
-# TITLE
-# By Ross et al.
+# Leveraging external validation data: the challenge of transporting measurement error parameters 
+# By ### et al.
 #
-# Code by Rachael Ross (2023/01/23)
+# Code by ### (2023/01/23)
 #
 #####################################################
 
