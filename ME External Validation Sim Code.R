@@ -1,26 +1,26 @@
-#####################################################
+##################################################### -
 #
 # Code for generation and analysis of a single 
 # simulated dataset from 
-# Leveraging external validation data: the challenges of transporting measurement error parameters 
-# By ### et al.
+# Leveraging external validation data: 
+#           the challenges of transporting measurement error parameters 
+# Ross et al. 2023
 #
-# Code by ### (2023/01/23)
+# Code by Rachael Ross 
 #
-#####################################################
+##################################################### -
 
 library("tidyverse")
 library("broom")
 library("purrr")
 library("rootSolve")
 library("numDeriv")
-library("geepack")
 
-####################################################
-# DEFINE FUNCTIONS FOR DATA GENERATION AND ANALYSIS
-####################################################
+#################################################### -
+# FUNCTIONS FOR DATA GENERATION  ----
+#################################################### -
 
-# Function to generate data
+## Function to generate data ----
 genbifx <- function(pop,N,Zp,Wp,Ap,Y0p,Y1p,Ystarp){
   tibble( 
     id = c(1:N),
@@ -37,7 +37,7 @@ genbifx <- function(pop,N,Zp,Wp,Ap,Y0p,Y1p,Ystarp){
     ystar = rbinom(N, size=1, prob=plogis(Ystarp[1] + Ystarp[2]*y + Ystarp[3]*z + + Ystarp[4]*a + Ystarp[5]*w)))
 }
 
-# Function to set input parameters for each scenario and generate data
+## Function to set input parameters to generate data ----
 togenbi <- function(scenario,n1size,n0size){ 
   
   if(scenario=="Dalt"){
@@ -97,7 +97,11 @@ togenbi <- function(scenario,n1size,n0size){
   return(full)
 }
 
-#### Functions to implement M-estimation
+#################################################### -
+# FUNCTIONS FOR ANALYSIS  ----
+#################################################### -
+
+## Functions to implement M-estimation ----
 
 # Function sums each column of estimating fx (b/c estimating fx produces a n by p matrix)
 sumstack <- function(parms, estfx){ 
@@ -134,28 +138,9 @@ mest <- function(estfx, init, conf=0.95){
 }
 
 
-### Functions for estimating point estimates by MLE
+## Estimating equations for each estimator ----
 
-# Function for g-comp estimates 
-getests <- function(data,b_est){
-  nc <- data %>% filter(r==1) %>% mutate(py=plogis(b_est[1] + b_est[2]*a + b_est[3]*z + b_est[4]*a*z)) %>% pull(py)
-  exp <- data %>% filter(r==1) %>% mutate(a=1) %>% mutate(py=plogis(b_est[1] + b_est[2]*a + b_est[3]*z + b_est[4]*a*z)) %>% pull(py)
-  unexp <- data %>% filter(r==1) %>% mutate(a=0) %>% mutate(py=plogis(b_est[1] + b_est[2]*a + b_est[3]*z + b_est[4]*a*z)) %>% pull(py)
-  c(rd=mean(exp)-mean(unexp), all1=mean(exp), all0=mean(unexp), nc=mean(nc))
-}
-
-# Function for modified likelihood
-loglik <- function(b, data, se, sp){
-  mu <- with(data,plogis(b[1] + b[2]*a + b[3]*z + b[4]*a*z))
-  ilogL <- with(data,ifelse(ystar==1, log(se*mu + (1-sp)*(1-mu)), log((1-se)*mu + sp*(1-mu))))
-  neglogL <- -1*sum(ilogL)
-  return(neglogL)
-}
-
-
-#### Estimating equations for each estimator
-
-# Standard gcomp
+### Standard gcomp ----
 gc_ef <- function(theta){
     
     # Extract individual parameters
@@ -179,7 +164,7 @@ gc_ef <- function(theta){
     return(cbind(ee_rd, ee_a1, ee_a0, ee_nc, ee_outmod))
 }
 
-# Accounting for nondifferential outcome mislcassification
+### Accounting for nondifferential outcome mislcassification ----
 gc_ndme_ef <- function(theta){
     
     colx <- ncol(xmat)
@@ -214,7 +199,7 @@ gc_ndme_ef <- function(theta){
     return(cbind(ee_rd, ee_a1, ee_a0, ee_nc, ee_outmod, ee_g1, ee_g2))
 }
 
-# Accounting for differential outcome misclassificaton WRT A and Z
+### Accounting for diff. outcome misclassificaton WRT A & Z ----
 gc_dme_ef <- function(theta){
     
     colx <- ncol(xmat)
@@ -252,14 +237,14 @@ gc_dme_ef <- function(theta){
     return(cbind(ee_rd, ee_a1, ee_a0, ee_nc, ee_outmod, ee_mep))
 }
 
-# Accounting for differential outcome misclassificaton WRT A, Z & W by conditioning on W
+### Accounting for diff. outcome misclassificaton WRT A, Z & W by conditioning on W ----
 # Use function above
 
-# Accounting for differential outcome misclassificaton WRT A, Z & W by weighting misclass parameters
-gc_dme_wtme_ef <- function(theta){
-    
+### Accounting for diff. outcome misclassificaton WRT A, Z & W by iterated approach ----
+gc_dme_iter_ef <- function(theta){
+
     colx <- ncol(xmat)
-    colxdag <- ncol(xmatdag)
+    #colxdag <- ncol(xmatdag)
     colxddag <- ncol(xmatddag)
     
     # Extract individual parameters
@@ -268,21 +253,13 @@ gc_dme_wtme_ef <- function(theta){
     risk_a0 <- theta[3]
     risk_nc <- theta[4]
     beta <- theta[5:(4 + colx)]
-    delta <- theta[(5 + colx):(4 + colx + colxdag)]
-    nu <- theta[(5 + colx + colxdag):(4 + colx + colxdag + colxddag)]
-    phi <- theta[(5 + colx + colxdag + colxddag):length(theta)]
+    nu <- theta[(5 + colx):(4 + colx + colxddag)]
+    phi <- theta[(5 + colx + colxddag):(4 + colx + 2*colxddag)]
+    xi <- theta[(5 + colx + 2*colxddag):(4 + colx + 3*colxddag)]
+    delta <- theta[(5 + colx + 3*colxddag):length(theta)]
     
-    #Fit logistic selection model for stabilization model
-    ee_rmod_stab = as.vector(r - plogis(xmatdia %*% phi))*xmatdia
-    
-    #Fit logistic selection model for weights
-    ee_rmod = as.vector(r - plogis(xmatddag %*% nu))*xmatddag
-    
-    #Construct weights
-    pi = (plogis(xmatddag %*% nu)*(1-plogis(xmatdia %*% phi)))/((1-plogis(xmatddag %*% nu))*plogis(xmatdia %*% phi))
-    
-    # Fit weighted logistic model for ME process in validation data
-    ee_mep <- as.vector((ystar - plogis(xmatdag %*% delta))*pi)*xmatdag*(1-r)
+    # Fit logistic model for ME process in validation data
+    ee_mep <- as.vector(ystar - plogis(xmatdag %*% delta))*xmatdag*(1-r)
     
     # Obtain individual level Se/Sp 
     gamma1 <- plogis(xmatdag1 %*% delta)
@@ -295,25 +272,36 @@ gc_dme_wtme_ef <- function(theta){
     S <- S1-S2
     ee_outmod <- as.vector(mu*(1-mu)*S)*xmat*r
     
+    # Generating predicted outcome values, omegas
+    mu_a1 <- plogis(xmat1 %*% beta)
+    mu_a0 <- plogis(xmat0 %*% beta)
+    mu_nc <- plogis(xmat %*% beta)
+    
+    # Nuisance logistic models with omega as outcome (3 total - nc, a=1, a=0)
+    ee_mu1_nu <- as.vector(mu_a1 - plogis(xmatddag %*% nu))*xmatddag*r
+    ee_mu0_phi <- as.vector(mu_a0 - plogis(xmatddag %*% phi))*xmatddag*r
+    ee_munc_xi <- as.vector(mu_nc - plogis(xmatddag %*% xi))*xmatddag*r
+    
     # Generating predicted outcome values
-    ee_a1 <- (plogis(xmat1 %*% beta) - risk_a1)*r
-    ee_a0 <- (plogis(xmat0 %*% beta) - risk_a0)*r
-    ee_nc <- (plogis(xmat %*% beta) - risk_nc)*r
+    ee_a1 <- (plogis(xmatddag1 %*% nu) - risk_a1)*r
+    ee_a0 <- (plogis(xmatddag0 %*% phi) - risk_a0)*r
+    ee_nc <- (plogis(xmatddag %*% xi) - risk_nc)*r
     
     # Contrast
     ee_rd <- as.vector(rep(risk_a1 - risk_a0, nrow(xmat)) - risk_diff)*r
     
-    return(cbind(ee_rd, ee_a1, ee_a0, ee_nc, ee_outmod, ee_mep, ee_rmod, ee_rmod_stab))
+    return(cbind(ee_rd, ee_a1, ee_a0, ee_nc, ee_outmod,
+                 ee_mu1_nu, ee_mu0_phi, ee_munc_xi, ee_mep))
 }
 
-####################################################
-# IMPLEMENTATION
-####################################################
+#################################################### -
+# IMPLEMENTATION ----
+#################################################### -
 
-#### Generate data
+## Generate data ----
 dat <- togenbi("C",100000,2000)
 
-#### Data set up
+## Data set up ----
 r <- dat$r
 y <- ifelse(dat$r==1,0,dat$y) # make y 0 for everyone in main study
 ystar <- dat$ystar
@@ -328,21 +316,21 @@ xmatdag1 <- matrix(c(ones, ones, dat$a, dat$z),nrow=nrow(dat)) # y set to 1 for 
 xmatdag0 <- matrix(c(ones, 1-ones, dat$a, dat$z),nrow=nrow(dat)) # y set to 0 for all
 
 
-#### Analysis 0: using true outcome
+## Analysis 0: using true outcome ----
 out <- dat$y
 mest(estfx=gc_ef, init=rep(0,8))
 
 
-#### Analysis 1: using misclassified outcome
+## Analysis 1: using misclassified outcome ----
 out <- dat$ystar
 mest(estfx=gc_ef, init=rep(0,8))
 
 
-#### Analysis 2: accounting for nondifferential misclassification
+## Analysis 2: accounting for nondifferential misclassification ----
 mest(estfx=gc_ndme_ef,init=c(rep(0,8),.9,.1))
 
 
-#### Analysis 3: accounting for differential misclassification WRT A & Z
+## Analysis 3: accounting for diff. misclassification WRT A & Z ----
 
 # Fit mislcassification model in validation data to get good starting values
 modsesp <- glm(ystar ~ y + a + z, data=dat[dat$r==0,], family='binomial')
@@ -351,7 +339,7 @@ modsesp <- glm(ystar ~ y + a + z, data=dat[dat$r==0,], family='binomial')
 mest(estfx=gc_dme_ef, init=c(rep(0,8),modsesp$coefficients))
 
 
-#### Analysis 4: accounting for differential misclassification WRT A, Z, & W by conditioning on W
+## Analysis 4: accounting for diff. misclassification WRT A, Z, & W by conditioning on W ----
 
 # Update data set up - add W to matrices
 xmat <- matrix(c(ones, dat$a, dat$z, dat$z*dat$a, dat$w),nrow=nrow(dat)) # design matrix
@@ -369,31 +357,17 @@ modsesp <- glm(ystar ~ y + a + z + w, data=dat[dat$r==0,], family='binomial')
 mest(estfx=gc_dme_ef, init=c(rep(0,9),modsesp$coefficients))
 
 
-#### Analysis 5: accounting for differential misclassification WRT A, Z, & W by wgting mislcass parameters
+## Analysis 5: accounting for diff. misclassification WRT A, Z, & W by iterated approach ----
 
-# Update data set up - no W in matrices
-xmat <- matrix(c(ones, dat$a, dat$z, dat$z*dat$a),nrow=nrow(dat)) # design matrix
-xmat1 <- matrix(c(ones, ones, dat$z, dat$z),nrow=nrow(dat)) # x set to 1 for all
-xmat0 <- matrix(c(ones, 1-ones, dat$z, 1-ones),nrow=nrow(dat)) # x set to 0 for all
+# Matrices for the iterated model - just A and Z
+xmatddag <- matrix(c(ones, dat$a, dat$z, dat$z*dat$a),nrow=nrow(dat))
+xmatddag1 <- matrix(c(ones, ones, dat$z, dat$z),nrow=nrow(dat)) 
+xmatddag0 <- matrix(c(ones, 1-ones, dat$z, 1-ones),nrow=nrow(dat))
 
-xmatdag <- matrix(c(ones, dat$y, dat$a, dat$z),nrow=nrow(dat)) # design matrix for misclass model
-xmatdag1 <- matrix(c(ones, ones, dat$a, dat$z),nrow=nrow(dat)) # y set to 1 for all
-xmatdag0 <- matrix(c(ones, 1-ones, dat$a, dat$z),nrow=nrow(dat)) # y set to 0 for all
-
-# Matrices for the selection models
-xmatddag <- matrix(c(ones, dat$a, dat$z, dat$w),nrow=nrow(dat))
-xmatdia <- matrix(c(ones, dat$a, dat$z),nrow=nrow(dat))
-
-# Use MLE to get starting values
-modr <- glm(r ~ a + z + w, data=dat, family='binomial')
-modr_stab <- glm(r ~ a + z, data=dat, family='binomial')
-withwt <- dat %>% mutate(prr = predict(modr,.,type="response"), 
-                      prr_stab = predict(modr_stab,.,type="response"),
-                      wt = prr/(1-prr)*(1-prr_stab)/prr_stab)
-modsesp <- geeglm(ystar ~ y + a + z, data=withwt[withwt$r==0,], family='binomial', 
-                  weights=withwt$wt[withwt$r==0], id=id, corstr="independence")
+# Fit mislcassification model in validation data to get good starting values
+modsesp <- glm(ystar ~ y + a + z + w, data=dat[dat$r==0,], family='binomial')
 
 # Implement M-estimation
-mest(estfx=gc_dme_wtme_ef, init=c(rep(0,8),modsesp$coeff,modr$coeff,modr_stab$coeff))
+mest(estfx=gc_dme_iter_ef, init=c(rep(0,21),modsesp$coefficients))
 
 
